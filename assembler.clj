@@ -6,22 +6,23 @@
   "1) each opcode accept a fixed number of arguments;"
   "2) tokens include: directive, opcode, register, immediate, label, comment;"
   "3) tokens are exclusively defined,"
-  "   meaning that no lexeme belongs to more than one token;"
+  "   meaning that no lexeme belongs to more than one token,"
+  "   except for hex number notation, such as x1;"
   "4) zero or one instruction per line;")
 
 (def token-complex
-  #{'id 'decimal 'string 'comment})
+  #{:id :decimal :string :comment})
 
 (def token-directive
-  #{'orig 'fill 'blkw 'stringz 'end})
+  #{:orig :fill :blkw :stringz :end})
 
 (def token-opcode
-  #{'add 'and 'br 'brn 'brnz 'brnp 'brnzp 'brz 'brzp 'brp
-    'jmp 'jsr 'jsrr 'ld 'ldi 'ldr 'lea 'not 'ret 'rti 'st 'sti
-    'str 'trap 'getc 'out 'puts 'in 'putsp 'halt})
+  #{:add :and :br :brn :brnz :brnp :brnzp :brz :brzp :brp
+    :jmp :jsr :jsrr :ld :ldi :ldr :lea :not :ret :rti :st :sti
+    :str :trap :getc :out :puts :in :putsp :halt})
 
 (def token-register
-  #{'r0 'r1 'r2 'r3 'r4 'r5 'r6 'r7})
+  #{:r0 :r1 :r2 :r3 :r4 :r5 :r6 :r7})
 
 (def token-set
   (clojure.set/union token-complex
@@ -63,7 +64,7 @@
               (if (empty? s)
                 {:char-seq s
                  :token-seq (conj (:token-seq curr)
-                                  {:token 'comment :value (str/join t)})}
+                                  {:token :comment :value (str/join t)})}
                 (recur (rest s) (conj t (first s)))))))
 
         ;;hex format token cannot be determined by the scanner, since
@@ -84,7 +85,7 @@
                     (if valid
                       {:char-seq s
                        :token-seq (conj (:token-seq curr)
-                                        {:token 'decimal :value t})}
+                                        {:token :decimal :value t})}
                       (let [curr (assoc curr :char-seq s)]
                         (assoc curr :errmsg-seq
                                (conj (:errmsg-seq curr)
@@ -105,10 +106,10 @@
                   {:char-seq s
                    :token-seq (conj (:token-seq curr)
                                     (let [x (str/join t)
-                                          sym (symbol (str/lower-case x))]
+                                          sym (keyword (str/lower-case x))]
                                       (if (or (token-register sym) (token-opcode sym))
                                         {:token sym}
-                                        {:token 'id :value x})))})))))
+                                        {:token :id :value x})))})))))
 
         read-directive
         (fn [curr]
@@ -121,10 +122,10 @@
                   (recur (rest s) (conj t c))
                   (let [x (str/join t)
                         y (token-directive
-                           (symbol (str/lower-case x)))
+                           (keyword (str/lower-case x)))
                         tseq (:token-seq curr)]
                     (case y
-                      'end
+                      :end
                       (let [curr (assoc curr :char-seq ())]
                         (if (not (empty? tseq))
                           (assoc curr :errmsg-seq
@@ -147,7 +148,7 @@
                 token-seq (:token-seq curr)]
             (if (= (first s) \") ;if true, empty string found
               {:char-seq (rest s)
-               :token-seq (conj token-seq {:token 'string :value ""})}
+               :token-seq (conj token-seq {:token :string :value ""})}
               (loop [s s
                      t []
                      consecutive-backslash-count 0]
@@ -164,7 +165,7 @@
                     (if (and (= peek \") (even? cbc))
                       {:char-seq (rest (rest s))
                        :token-seq (conj token-seq
-                                        {:token 'string :value (str/join (conj t c))})}
+                                        {:token :string :value (str/join (conj t c))})}
                       (recur (rest s) (conj t c) cbc))))))))]
     (loop [curr {:char-seq s
                  :token-seq clojure.lang.PersistentQueue/EMPTY
@@ -208,7 +209,7 @@
               (do (println "Error at line" line-num ":" msg ".")
                   (recur (pop e))))))
       (let [tseq (:token-seq curr)]
-        (if (= (:token (peek tseq)) 'end)
+        (if (= (:token (peek tseq)) :end)
           (reduced v)
           (conj v (:token-seq curr)))))))
 
@@ -223,27 +224,27 @@
 ;;doesn't handle empty queue here
 (defn token-queue-scanner [q]
   (comment
-    "identify first encountered 'id(as label), opcode or directive in the given"
+    "identify first encountered :id(as label), opcode or directive in the given"
     "token queue, skip commas and the comment, and turn the token queue into"
     "a map, such as:"
-    {:first 'add :label "LOOP"
-     :rest [{:token 'id :value "R1"},
-            {:token 'id :value "R1"},
-            {:token 'id :value "x-1"}
+    {:first :add :label "LOOP"
+     :rest [{:token :id :value "R1"},
+            {:token :id :value "R1"},
+            {:token :id :value "x-1"}
             :errmsg nil]}
-    "or" {:first 'orig :rest []})
+    "or" {:first :orig :rest []})
   (assert (and (= (type q) clojure.lang.PersistentQueue)
                (not (empty? q))))
   (loop [p :get-label
          q q
          r {:first nil :label nil :rest [] :errmsg nil}]
     (let [t (peek q)]
-      (if (or (nil? t) (= (:token t) 'comment))
+      (if (or (nil? t) (= (:token t) :comment))
         r
         (let [sym (:token t)]
           (case p
             :get-label ;try :get-first next if proceed
-            (if (= sym 'id)
+            (if (= sym :id)
               (recur :get-first (pop q)
                      (assoc r :label (:value t)))
               (recur :get-first q r))
@@ -256,7 +257,7 @@
                      "doesn't find directive or opcode at expected position"))
 
             :get-rest
-            (if (or (= sym 'id) (= sym 'decimal) (= sym 'string) (token-register sym))
+            (if (or (= sym :id) (= sym :decimal) (= sym :string) (token-register sym))
               (recur :get-rest (pop q)
                      (assoc r :rest (conj (:rest r) t)))
               (assoc r :errmsg
@@ -418,7 +419,7 @@
       (assert (or (and (nil? orig) (nil? pc))
                   (and (memSpace? orig) (memSpace? pc) (<= orig pc))))
       (if (nil? orig)
-        (if (not (= (:first inst) 'orig))
+        (if (not (= (:first inst) :orig))
           (do (println "Error at line" ln ":"
                        ".ORIG is expected to be defined at first.")
               init-env)
@@ -432,12 +433,12 @@
               op       (:first inst)
               [x & xs] (:rest inst)
               env      (if label (add-label env label) env)]
-          (condp = op
-            'orig
+          (case op
+            :orig
             (do (println "Error at line" ln ":" "re-definition of .ORIG.")
                 env)
             
-            'blkw
+            :blkw
             (let [s (:value x)
                   t (:value (first xs))]
               (if (nil? s)
@@ -446,14 +447,14 @@
                     env)
                 (make-blkw env s t))) ;t can be nil
             
-            'stringz
-            (if (not (= (:token x) 'string))
-              (do (println "Error at line" ln ":" 'stringz "expects"
+            :stringz
+            (if (not (= (:token x) :string))
+              (do (println "Error at line" ln ":" :stringz "expects"
                            "a string argument instead of" (:token x) ".")
                   env)
               (make-stringz env (:value x)))
 
-            'fill
+            :fill
             (let [s (:value x)]
               (if (nil? s)
                 (do (println "Error at line" ln ":"
@@ -479,7 +480,7 @@
         op   (:first inst)
         argv (:rest inst)]
     (condp get op
-      #{'br 'brn 'brnz 'brnp 'brnzp 'brz 'brzp 'brp 'jsr}
+      #{:br :brn :brnz :brnp :brnzp :brz :brzp :brp :jsr}
       (let [k (:value (first argv))
             v (get lset (if (string? k)
                           (str/lower-case k)
@@ -491,14 +492,14 @@
                   (assoc :vec (conj (:vec env) nil))
                   (assoc :pc (inc pc))))
           (let [argv (vec (-> (rest argv)
-                              (conj  {:token 'decimal
+                              (conj  {:token :decimal
                                       :value (str (- v pc 1))})))
                 inst (assoc inst :rest argv)]
             (-> env
                 (assoc :vec (conj (:vec env) inst))
                 (assoc :pc (inc pc))))))
       
-      #{'ld 'ldi 'lea 'st 'sti}
+      #{:ld :ldi :lea :st :sti}
       (let [k (:value (second argv))
             v (get lset (if (string? k)
                           (str/lower-case k)
@@ -510,7 +511,7 @@
                   (assoc :vec (conj (:vec env) nil))
                   (assoc :pc (inc pc))))
           (let [argv (vec (-> (rest (rest argv))
-                              (conj {:token 'decimal
+                              (conj {:token :decimal
                                      :value (str (- v pc 1))})
                               (conj (first argv))))
                 inst (assoc inst :rest argv)]
@@ -535,87 +536,8 @@
     (-> (reduce label-to-pcoffset env vec)
         (dissoc :pc) (dissoc :label-coll))))
 
-(defn encode-add [inst]
-  (assert (= (:first inst) 'add))
-  (let [ln (:line-num inst)
-        argv (:rest inst) c (count argv)]
-    (if (not (= c 3))
-      (println "Error at line" ln ":"
-               'add "expects 3 arguments instead of" c ".")
-      (loop [i 0
-             xs argv
-             r {}
-             eflag false]
-        (let [x (first xs) t (:token x)
-              xs (rest xs)]
-          (case i
-            0 (if (not (token-register t))
-                (do (println "Error at line" ln ":" 'add "expects"
-                             "register token as its 1st argument"
-                             "instead of" t ".")
-                    (recur 1 xs r (or eflag true)))
-                (recur 1 xs (assoc r :dr t) (or eflag false)))
-            1 (if (not (token-register t))
-                (do (println "Error at line" ln ":" 'add "expects"
-                             "register token as its 2nd argument"
-                             "instead of" t ".")
-                    (recur 2 xs r (or eflag true)))
-                (recur 2 xs (assoc r :sr1 t) (or eflag false)))
-            2 (if (token-register t)
-                (recur 3 xs (-> r (assoc :sr2 t) (assoc :op 'add))
-                       (or eflag false))
-                (let [vt (:value x)
-                      v (if (string? vt) (imm5Token vt))]
-                  (if v
-                    (recur 3 xs (-> r (assoc :imm5 v) (assoc :op 'add-i))
-                           (or eflag false))
-                    (do (println "Error at line" ln ":" 'add "expects"
-                                 "register or imm5 token as its 3rd argument"
-                                 "instead of" t ".")
-                        (recur 3 xs r (or eflag true))))))
-            3 (if eflag nil r)))))))
-
-(defn encode-and [inst]
-  (assert (= (:first inst) 'and))
-  (let [ln (:line-num inst)
-        argv (:rest inst) c (count argv)]
-    (if (not (= c 3))
-      (println "Error at line" ln ":"
-               'and "expects 3 arguments instead of" c ".")
-      (loop [i 0
-             xs argv
-             r {}
-             eflag false]
-        (let [x (first xs) t (:token x)
-              xs (rest xs)]
-          (case i
-            0 (if (not (token-register t))
-                (do (println "Error at line" ln ":" 'and "expects"
-                             "register token as its 1st argument"
-                             "instead of" t ".")
-                    (recur 1 xs r (or eflag true)))
-                (recur 1 xs (assoc r :dr t) (or eflag false)))
-            1 (if (not (token-register t))
-                (do (println "Error at line" ln ":" 'and "expects"
-                             "register token as its 2nd argument"
-                             "instead of" t ".")
-                    (recur 2 xs r (or eflag true)))
-                (recur 2 xs (assoc r :sr1 t) (or eflag false)))
-            2 (if (token-register t)
-                (recur 3 xs (-> r (assoc :sr2 t) (assoc :op 'and))
-                       (or eflag false))
-                (let [vt (:value x)
-                      v (if (string? vt) (imm5Token vt))]
-                  (if v
-                    (recur 3 xs (-> r (assoc :imm5 v) (assoc :op 'and-i))
-                           (or eflag false))
-                    (do (println "Error at line" ln ":" 'and "expects"
-                                 "register or imm5 token as its 3rd argument"
-                                 "instead of" t ".")
-                        (recur 3 xs r (or eflag true))))))
-            3 (if eflag nil r)))))))
-
-
+;;data structure returned by register, offset6, offset9, etc. checkers.
+(def checker-ret {:value nil :errmsg nil})
 
 (defn gen-encoder [op argc & clauses]
   (assert (= (* argc 2) (count clauses)))
@@ -641,7 +563,7 @@
                   msg (:errmsg result)]
               (if msg
                 (do (println "Error at line" ln ":" op "expects"
-                             "argument" i "be" msg ".")
+                             "argument" i "to be" msg ".")
                     (recur (inc i) (rest (rest cs)) (rest xs)
                            (assoc r field nil)
                            (or eflag true)))
@@ -651,98 +573,191 @@
 
 (defn register [x]
   (let [t (:token x) v (token-register t)]
-    (if v {:value v :errmsg nil}
-        {:value nil :errmsg (str "register token instead of " t)})))
+    (if v
+      (assoc checker-ret :value
+             (case v :r0 0 :r1 1 :r2 2 :r3 3 :r4 4 :r5 5 :r6 6 :r7 7))
+      (assoc checker-ret :errmsg (str "register token instead of " t)))))
+
+(defn imm5 [x]
+  (let [s (:value x) v (if (string? s) (imm5Token s) nil)]
+    (if v (assoc checker-ret :value v)
+        (assoc checker-ret :errmsg (str "imm5 token instead of " s)))))
 
 (defn offset6 [x]
   (let [s (:value x) v (if (string? s) (offset6Token s) nil)]
-    (if v {:value v :errmsg nil}
-        {:value nil :errmsg (str "offset6 token instead of " s)})))
+    (if v (assoc checker-ret :value v)
+        (assoc checker-ret :errmsg (str "offset6 token instead of " s)))))
 
 (defn offset9 [x]
   (let [s (:value x) v (if (string? s) (offset9Token s) nil)]
-    (if v {:value v :errmsg nil}
-        {:value nil :errmsg (str "offset9 token instead of " x)})))
+    (if v (assoc checker-ret :value v)
+        (assoc checker-ret :errmsg (str "offset9 token instead of " s)))))
 
 (defn offset11 [x]
   (let [s (:value x) v (if (string? s) (offset11Token s) nil)]
-    (if v {:value v :errmsg nil}
-        {:value nil :errmsg (str "offset11 token instead of " s)})))
+    (if v (assoc checker-ret :value v)
+        (assoc checker-ret :errmsg (str "offset11 token instead of " s)))))
 
 (defn trapvect8 [x]
   (let [s (:value x) v (if (string? s) (trapvect8Token s) nil)]
-    (if v {:value v :errmsg nil}
-        {:value nil :errmsg (str "trapvect8 token instead of " s)})))
+    (if v (assoc checker-ret :value v)
+        (assoc checker-ret :errmsg (str "trapvect8 token instead of " s)))))
 
-(def encode-br (gen-encoder 'br 1 :pcoffset9 offset9))
-(def encode-brn (gen-encoder 'brn 1 :pcoffset9 offset9))
-(def encode-brz (gen-encoder 'brz 1 :pcoffset9 offset9))
-(def encode-brp (gen-encoder 'brp 1 :pcoffset9 offset9))
-(def encode-brzp (gen-encoder 'brzp 1 :pcoffset9 offset9))
-(def encode-brnp (gen-encoder 'brnp 1 :pcoffset9 offset9))
-(def encode-brnz (gen-encoder 'brnz 1 :pcoffset9 offset9))
-(def encode-brnzp (gen-encoder 'brnzp 1 :pcoffset9 offset9))
-(def encode-jmp (gen-encoder 'jmp 1 :baser register))
-(def encode-jsr (gen-encoder 'jsr 1 :pcoffset9 offset9))
-(def encode-jsrr (gen-encoder 'jsrr 1 :baser register))
-(def encode-ld (gen-encoder 'ld 2 :dr register :pcoffset9 offset9))
-(def encode-ldi (gen-encoder 'ldi 2 :dr register :pcoffset9 offset9))
-(def encode-ldr (gen-encoder 'ldr 3 :dr register :baser register :pcoffset6 offset6))
-(def encode-lea (gen-encoder 'lea 2 :dr register :pcoffset9 offset9))
-(def encode-not (gen-encoder 'not 2 :dr register :sr register))
-(def encode-ret (gen-encoder 'ret 0))
-(def encode-rti (gen-encoder 'rti 0))
-(def encode-st (gen-encoder 'st 2 :sr register :pcoffset9 offset9))
-(def encode-sti (gen-encoder 'sti 2 :sr register :pcoffset9 offset9))
-(def encode-str (gen-encoder 'str 3 :sr register :baser register :offset6 offset6))
-(def encode-trap (gen-encoder 'trap 1 :trapvect8 trapvect8))
+(defn encode-add [inst]
+  (assert (= (:first inst) :add))
+  (let [ln (:line-num inst)
+        argv (:rest inst) c (count argv)]
+    (if (not (= c 3))
+      (println "Error at line" ln ":"
+               :add "expects 3 arguments instead of" c ".")
+      (loop [i 0
+             xs argv
+             r {}
+             eflag false]
+        (let [x (first xs) t (:token x)
+              xs (rest xs)]
+          (case i
+            0 (let [result (register x) msg (:errmsg result)]
+                (if msg (do (println "Error at line" ln ":" :add
+                                     "expects argument 1 to be" msg ".")
+                            (recur 1 xs r (or eflag true)))
+                    (recur 1 xs (assoc r :dr result) (or eflag false))))
+
+            1 (let [result (register x) msg (:errmsg result)]
+                (if msg (do (println "Error at line" ln ":" :add
+                                     "expects argument 2 to be" msg ".")
+                            (recur 2 xs r (or eflag true)))
+                    (recur 2 xs (assoc r :sr1 result) (or eflag false))))
+
+            2 (let [result (register x)]
+                (if (nil? (:errmsg result))
+                  (recur 3 xs (-> (assoc r :sr2 (:value result))
+                                  (assoc :op :add))
+                         (or eflag false))
+                  (let [result (imm5 x)]
+                    (if (nil? (:errmsg result))
+                      (recur 3 xs (-> (assoc r :imm5 (:value result))
+                                      (assoc :op :add-i))
+                             (or eflag false))
+                      (do (println "Error at line" ln ":" :add "expects"
+                                   "argument 3 be register or imm5 token"
+                                   "instead of" t ".")
+                          (recur 3 xs r (or eflag true)))))))
+
+            3 (if eflag nil r)))))))
+
+(defn encode-and [inst]
+  (assert (= (:first inst) :and))
+  (let [ln (:line-num inst)
+        argv (:rest inst) c (count argv)]
+    (if (not (= c 3))
+      (println "Error at line" ln ":"
+               :and "expects 3 arguments instead of" c ".")
+      (loop [i 0
+             xs argv
+             r {}
+             eflag false]
+        (let [x (first xs) t (:token x)
+              xs (rest xs)]
+          (case i
+            0 (let [result (register x) msg (:errmsg result)]
+                (if msg (do (println "Error at line" ln ":" :and
+                                     "expects argument 1 to be" msg ".")
+                            (recur 1 xs r (or eflag true)))
+                    (recur 1 xs (assoc r :dr result) (or eflag false))))
+
+            1 (let [result (register x) msg (:errmsg result)]
+                (if msg (do (println "Error at line" ln ":" :and
+                                     "expects argument 2 to be" msg ".")
+                            (recur 2 xs r (or eflag true)))
+                    (recur 2 xs (assoc r :sr1 result) (or eflag false))))
+
+            2 (let [result (register x)]
+                (if (nil? (:errmsg result))
+                  (recur 3 xs (-> (assoc r :sr2 (:value result))
+                                  (assoc :op :and))
+                         (or eflag false))
+                  (let [result (imm5 x)]
+                    (if (nil? (:errmsg result))
+                      (recur 3 xs (-> (assoc r :imm5 (:value result))
+                                      (assoc :op :and-i))
+                             (or eflag false))
+                      (do (println "Error at line" ln ":" :and "expects"
+                                   "argument 3 be register or imm5 token"
+                                   "instead of" t ".")
+                          (recur 3 xs r (or eflag true)))))))
+
+            3 (if eflag nil r)))))))
+
+(def encode-br (gen-encoder :br 1 :pcoffset9 offset9))
+(def encode-brn (gen-encoder :brn 1 :pcoffset9 offset9))
+(def encode-brz (gen-encoder :brz 1 :pcoffset9 offset9))
+(def encode-brp (gen-encoder :brp 1 :pcoffset9 offset9))
+(def encode-brzp (gen-encoder :brzp 1 :pcoffset9 offset9))
+(def encode-brnp (gen-encoder :brnp 1 :pcoffset9 offset9))
+(def encode-brnz (gen-encoder :brnz 1 :pcoffset9 offset9))
+(def encode-brnzp (gen-encoder :brnzp 1 :pcoffset9 offset9))
+(def encode-jmp (gen-encoder :jmp 1 :baser register))
+(def encode-jsr (gen-encoder :jsr 1 :pcoffset9 offset9))
+(def encode-jsrr (gen-encoder :jsrr 1 :baser register))
+(def encode-ld (gen-encoder :ld 2 :dr register :pcoffset9 offset9))
+(def encode-ldi (gen-encoder :ldi 2 :dr register :pcoffset9 offset9))
+(def encode-ldr (gen-encoder :ldr 3 :dr register :baser register :pcoffset6 offset6))
+(def encode-lea (gen-encoder :lea 2 :dr register :pcoffset9 offset9))
+(def encode-not (gen-encoder :not 2 :dr register :sr register))
+(def encode-ret (gen-encoder :ret 0))
+(def encode-rti (gen-encoder :rti 0))
+(def encode-st (gen-encoder :st 2 :sr register :pcoffset9 offset9))
+(def encode-sti (gen-encoder :sti 2 :sr register :pcoffset9 offset9))
+(def encode-str (gen-encoder :str 3 :sr register :baser register :offset6 offset6))
+(def encode-trap (gen-encoder :trap 1 :trapvect8 trapvect8))
 
 (defn trap-unalias [op x]
   (fn [inst]
     (let [f (gen-encoder op 0)
           r (f inst)]
-      (if r {:op 'trap :trapvect8 x}))))
-(def encode-getc (trap-unalias 'getc 32))
-(def encode-out (trap-unalias 'out 33))
-(def encode-puts (trap-unalias 'puts 34))
-(def encode-in (trap-unalias 'in 35))
-(def encode-putsp (trap-unalias 'putsp 36))
-(def encode-halt (trap-unalias 'halt 37))
+      (if r {:op :trap :trapvect8 x}))))
+(def encode-getc (trap-unalias :getc 32))
+(def encode-out (trap-unalias :out 33))
+(def encode-puts (trap-unalias :puts 34))
+(def encode-in (trap-unalias :in 35))
+(def encode-putsp (trap-unalias :putsp 36))
+(def encode-halt (trap-unalias :halt 37))
 
 (defn encode [v inst]
   (assert (vector? v))
   (let [op (:first inst) ;op can be nil
-        f (condp = op
-            'add encode-add
-            'and encode-and
-            'br encode-br
-            'brn encode-brn
-            'brnz encode-brnz
-            'brnp encode-brnp
-            'brnzp encode-brnzp
-            'brz encode-brz
-            'brzp encode-brzp
-            'brp encode-brp
-            'jmp encode-jmp
-            'jsr encode-jsr
-            'jsrr encode-jsrr
-            'ld encode-ld
-            'ldi encode-ldi
-            'ldr encode-ldr
-            'lea encode-lea
-            'not encode-not
-            'ret encode-ret
-            'rti encode-rti
-            'st encode-st
-            'sti encode-sti
-            'str encode-str
-            'trap encode-trap
-            'getc encode-getc
-            'out encode-out
-            'puts encode-puts
-            'in encode-in
-            'putsp encode-putsp
-            'halt encode-halt
+        f (case op
+            :add encode-add
+            :and encode-and
+            :br encode-br
+            :brn encode-brn
+            :brnz encode-brnz
+            :brnp encode-brnp
+            :brnzp encode-brnzp
+            :brz encode-brz
+            :brzp encode-brzp
+            :brp encode-brp
+            :jmp encode-jmp
+            :jsr encode-jsr
+            :jsrr encode-jsrr
+            :ld encode-ld
+            :ldi encode-ldi
+            :ldr encode-ldr
+            :lea encode-lea
+            :not encode-not
+            :ret encode-ret
+            :rti encode-rti
+            :st encode-st
+            :sti encode-sti
+            :str encode-str
+            :trap encode-trap
+            :getc encode-getc
+            :out encode-out
+            :puts encode-puts
+            :in encode-in
+            :putsp encode-putsp
+            :halt encode-halt
             nil (fn [x] x))]
     (conj v (f inst))))
 
