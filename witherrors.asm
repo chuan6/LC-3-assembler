@@ -11,7 +11,7 @@ LOOP	LDR	R2, R2, #0
 	BRp	LOOP		;comment
 	HALT
 ARRAY   .BLKW 4 0
-STRING  .STRINGZ "hello\""
-STRING  .STRINGZ "world"        
+STRING  .STRINGZ "\\""
+STRING  .STRINGZ "\"
 	.END
         don't care

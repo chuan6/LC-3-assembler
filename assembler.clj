@@ -30,19 +30,36 @@
                      token-opcode
                      token-register))
 
+(def init-q clojure.lang.PersistentQueue/EMPTY)
+
 ;;print-method implementation is from Joy of Clojure(2nd edition)
 (defmethod print-method clojure.lang.PersistentQueue [queue writer]
   (print-method '<- writer)
   (print-method (seq queue) writer)
   (print-method '-< writer))
 
+(def first-pass-data
+  {:char-seq ()       ;input sequence of characters
+   :token-seq init-q  ;FIFO queue that holds recognized tokens so far
+   :errmsg-seq init-q ;FIFO queue that records encountered errors
+   })
+
 (defn line-scanner
   "turn a line of string into a queue of tokens"
   [s]
-  (let [separator?
+  (let [not-separator? ;doesn't consume the character
         (fn [c]
           (assert (char? c))
-          (or (= c \,) (= c \;) (Character/isWhitespace c)))
+          (not (or (= c \,) (= c \;) (Character/isWhitespace c))))
+
+        update-data
+        (fn [curr s t e]
+          (let [curr (if s (assoc curr :char-seq s) curr)
+                curr (if t (assoc curr :token-seq (conj (:token-seq curr) t))
+                         curr)
+                curr (if e (assoc curr :errmsg-seq (conj (:errmsg-seq curr) e))
+                         curr)]
+            curr))
         
         skip-spaces
         (fn [curr]
@@ -53,7 +70,7 @@
               (let [c (first s)]
                 (if (and c (or (Character/isWhitespace c) (= c \,)))
                   (recur (rest s))
-                  (assoc curr :char-seq s))))))
+                  (update-data curr s nil nil))))))
 
         read-comment ;consume the rest of the line as comment
         (fn [curr]
@@ -62,34 +79,29 @@
             (loop [s (rest s)
                    t []]
               (if (empty? s)
-                {:char-seq s
-                 :token-seq (conj (:token-seq curr)
-                                  {:token :comment :value (str/join t)})}
+                (update-data curr s {:token :comment :value (str/join t)} nil)
                 (recur (rest s) (conj t (first s)))))))
 
-        ;;hex format token cannot be determined by the scanner, since
-        ;;it starts with \x in lc-3 instead of "0x" as in other languages
+        ;;hex format tokens don't come here, since they start with \x
+        ;;(a letter as any id tokens) in lc-3 instead of "0x" as in other languages
         read-decimal
         (fn [curr]
           (let [s (:char-seq curr)
                 c (first s)]
             (assert (or (= c \#) (Character/isDigit c)))
             (loop [s (rest s)
-                   t (if (= c \#) [] [c])
-                   valid true]
+                   t (if (= c \#) [] [c]) ;drop leading \# if there is one
+                   all-digits? true]    ;remember encounterance of error(s),
+                                        ;since loop doesn't stop at 1st error
               (let [c (first s)]
-                (if (and c (not (separator? c))) ;read until separator or nil
+                (if (and c (not-separator? c)) ;read until separator or nil
                   (recur (rest s) (conj t c)
-                         (and (Character/isDigit c) valid))
+                         (and all-digits? (Character/isDigit c)))
                   (let [t (str/join t)]
-                    (if valid
-                      {:char-seq s
-                       :token-seq (conj (:token-seq curr)
-                                        {:token :decimal :value t})}
-                      (let [curr (assoc curr :char-seq s)]
-                        (assoc curr :errmsg-seq
-                               (conj (:errmsg-seq curr)
-                                     (str t " is not a well formatted number")))))))))))
+                    (if all-digits?
+                      (update-data curr s {:token :decimal :value t} nil)
+                      (update-data curr s nil
+                                   (str t " is not a well formatted number")))))))))
 
         ;;read a label, an opcode, a register, or a hex format number
         ;;Note: syntax of label in lc-3 is not constructively defined.
@@ -101,15 +113,13 @@
             (loop [s (rest s)
                    t [c]]
               (let [c (first s)]
-                (if (and c (not (separator? c)))
+                (if (and c (not-separator? c))
                   (recur (rest s) (conj t c))
-                  {:char-seq s
-                   :token-seq (conj (:token-seq curr)
-                                    (let [x (str/join t)
-                                          sym (keyword (str/lower-case x))]
-                                      (if (or (token-register sym) (token-opcode sym))
-                                        {:token sym}
-                                        {:token :id :value x})))})))))
+                  (let [x (str/join t)
+                        sym (keyword (str/lower-case x))]
+                    (if (or (token-register sym) (token-opcode sym))
+                      (update-data curr s {:token sym} nil)
+                      (update-data curr s {:token :id :value x} nil))))))))
 
         read-directive
         (fn [curr]
@@ -118,74 +128,58 @@
             (loop [s (rest s)
                    t []]
               (let [c (first s)]
-                (if (and c (not (separator? c)))
+                (if (and c (not-separator? c))
                   (recur (rest s) (conj t c))
                   (let [x (str/join t)
-                        y (token-directive
-                           (keyword (str/lower-case x)))
-                        tseq (:token-seq curr)]
+                        y (token-directive (keyword (str/lower-case x)))]
                     (case y
-                      :end
-                      (let [curr (assoc curr :char-seq ())]
-                        (if (not (empty? tseq))
-                          (assoc curr :errmsg-seq
-                                 (conj (:errmsg-seq curr)
-                                       (str "unexpected tokens preceding " y)))
-                          (assoc curr :token-seq (conj tseq {:token y}))))
-                      
-                      nil (let [curr (assoc curr :char-seq s)]
-                            (assoc curr :errmsg-seq
-                                   (conj (:errmsg-seq curr)
-                                         (str "." x " is not a directive"))))
-
-                      {:char-seq s
-                       :token-seq (conj (:token-seq curr) {:token y})})))))))
+                      :end (if (empty? (:token-seq curr))
+                             (update-data curr () {:token y} nil)
+                             (update-data curr () nil
+                                          (str "unexpected tokens preceding " y)))
+                      nil  (update-data curr s nil
+                                       (str "." x " is not a directive"))
+                      (update-data curr s {:token y} nil))))))))
 
         read-string
         (fn [curr]
-          (assert (= (first (:char-seq curr)) \"))
-          (let [s (rest (:char-seq curr))
-                token-seq (:token-seq curr)]
-            (if (= (first s) \") ;if true, empty string found
-              {:char-seq (rest s)
-               :token-seq (conj token-seq {:token :string :value ""})}
-              (loop [s s
-                     t []
-                     consecutive-backslash-count 0]
-                (if (or (empty? s) (empty? (rest s)))
-                  (let [curr (assoc curr :char-seq ())]
-                    (assoc curr :errmsg-seq
-                           (conj (:errmsg-seq curr)
+          (let [s (:char-seq curr)]
+            (assert (= (first s) \"))
+            (let [suc (second s)]
+              (case suc
+                nil (update-data curr () nil "string misses closing double-quote")
+                \"  (update-data curr (rest s) {:token :string :value ""} nil)
+                (loop [s (rest s)
+                       t [suc]
+                       consecutive-backslash-count 0]
+                  (assert (not (empty? s)))
+                  (if (empty? (rest s))
+                    (update-data curr () nil
                                  (str "string " (str/join t)
-                                      " misses closing double-quote"))))
-                  (let [c    (first s)
-                        peek (second s) ;c and peek are non-nil
-                        cbc  (if (= c \\) (inc consecutive-backslash-count)
-                                 0)]
-                    (if (and (= peek \") (even? cbc))
-                      {:char-seq (rest (rest s))
-                       :token-seq (conj token-seq
-                                        {:token :string :value (str/join (conj t c))})}
-                      (recur (rest s) (conj t c) cbc))))))))]
-    (loop [curr {:char-seq s
-                 :token-seq clojure.lang.PersistentQueue/EMPTY
-                 :errmsg-seq clojure.lang.PersistentQueue/EMPTY}]
-      (let [s (:char-seq curr)
-            q (:token-seq curr)
-            e (:errmsg-seq curr)]
+                                      " misses closing double-quote"))
+                    (let [c   (first s)
+                          suc (second s)
+                          cbc (if (= c \\) (inc consecutive-backslash-count)
+                                  0)]
+                      (if (and (= suc \") (even? cbc))
+                        (update-data curr (rest (rest s))
+                                     {:token :string :value (str/join t)} nil)
+                        (recur (rest s) (conj t suc) cbc)))))))))]
+    (loop [curr (assoc first-pass-data :char-seq s)]
+      (let [{s :char-seq q :token-seq e :errmsg-seq} curr]
         (if (empty? s)
           curr ;including error messages
           (let [c (first s)]
             (cond
               (or (Character/isWhitespace c) (= c \,))
-              (recur (skip-spaces curr))
-
+              (recur (skip-spaces curr)) ;comma is recognized as a space character
+              
               (Character/isLetter c)
               (recur (read-id curr))
-
+              
               (Character/isDigit c)
               (recur (read-decimal curr))
-
+              
               :else
               (case c
                 \; (recur (read-comment curr))
@@ -193,10 +187,7 @@
                 \. (recur (read-directive curr))
                 \" (recur (read-string curr))
                 (recur
-                 (let [curr (assoc curr :char-seq (rest s))]
-                   (assoc curr :errmsg-seq
-                          (conj (:errmsg-seq curr)
-                                (str "invalid character " c " is found")))))))))))))
+                 (update-data curr (rest s) nil (str "invalid character " c " is found")))))))))))
 
 (defn line-scan-reducer [v line]
   (let [line-num (inc (count v))
@@ -764,12 +755,14 @@
 (defn fifth-pass
   "encode each item in the vec"
   [env]
-  (let [v (:vec env)]
+  (let [orig (:orig env)
+        v (:vec env)]
     (assert (loop [t true
                    v v]
               (if (empty? v) t
                   (recur (and t (first v)) (rest v)))))
-    (reduce encode [] v)))
+    {:orig orig
+     :mem (reduce encode [] v)}))
 
 (defn assemble [path-to-file]
   (-> path-to-file
