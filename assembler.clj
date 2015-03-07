@@ -30,6 +30,9 @@
                      token-opcode
                      token-register))
 
+;;note: since peek on both init-q, which is empty, and (conj init-q nil),
+;;which is non-empty, results nil, empty? is used to test the emptyness
+;;of a queue.
 (def init-q clojure.lang.PersistentQueue/EMPTY)
 
 ;;print-method implementation is from Joy of Clojure(2nd edition)
@@ -172,7 +175,7 @@
           (let [c (first s)]
             (cond
               (or (Character/isWhitespace c) (= c \,))
-              (recur (skip-spaces curr)) ;comma is recognized as a space character
+              (recur (skip-spaces curr)) ;\, is recognized as a space character
               
               (Character/isLetter c)
               (recur (read-id curr))
@@ -187,81 +190,77 @@
                 \. (recur (read-directive curr))
                 \" (recur (read-string curr))
                 (recur
-                 (update-data curr (rest s) nil (str "invalid character " c " is found")))))))))))
+                 (update-data curr (rest s) nil
+                              (str "invalid character " c " is found")))))))))))
 
 (defn line-scan-reducer [v line]
-  (let [line-num (inc (count v))
+  (let [ln   (inc (count v))
         curr (line-scanner line)]
     (do
-      ;;print error message if there is any
+      ;;print error messages if there is any
       (loop [e (:errmsg-seq curr)]
-          (let [msg (peek e)]
-            (if msg
-              (do (println "Error at line" line-num ":" msg ".")
-                  (recur (pop e))))))
-      (let [tseq (:token-seq curr)]
-        (if (= (:token (peek tseq)) :end)
-          (reduced v)
-          (conj v (:token-seq curr)))))))
+        (let [msg (peek e)]
+          (if msg
+            (do (println "Error at line" ln ":" msg ".")
+                (recur (pop e))))))
+      (let [q (:token-seq curr)]
+        (if (= (:token (peek q)) :end) (reduced v)
+            (conj v q))))))
 
 
 (use 'clojure.java.io)
 (defn first-pass
-  "produce a vector of token queues, one queue for each line of the file"
+  "produce a vector of token queues, one queue for each line before .END"
   [path-to-file]
   (with-open [r (reader path-to-file)]
     (reduce line-scan-reducer [] (line-seq r))))
 
+(def second-pass-data {:line-num nil
+                       :label nil
+                       :first nil  ;opcode or directive
+                       :rest []    ;vector of arguments
+                       :errmsg nil ;holds one or none error message
+                       })
+
 ;;doesn't handle empty queue here
 (defn token-queue-scanner [q]
   (comment
-    "identify first encountered :id(as label), opcode or directive in the given"
+    "Identify first encountered :id(as label), opcode or directive in the given"
     "token queue, skip commas and the comment, and turn the token queue into"
-    "a map, such as:"
-    {:first :add :label "LOOP"
-     :rest [{:token :id :value "R1"},
-            {:token :id :value "R1"},
-            {:token :id :value "x-1"}
-            :errmsg nil]}
-    "or" {:first :orig :rest []})
+    "second-pass-data.")
   (assert (and (= (type q) clojure.lang.PersistentQueue)
                (not (empty? q))))
   (loop [p :get-label
          q q
-         r {:first nil :label nil :rest [] :errmsg nil}]
-    (let [t (peek q)]
-      (if (or (nil? t) (= (:token t) :comment))
+         r second-pass-data]
+    (let [x (peek q) t (:token x)]
+      (if (or (empty? q) (= t :comment)) ;loop ends at empty q or :comment
         r
-        (let [sym (:token t)]
-          (case p
-            :get-label ;try :get-first next if proceed
-            (if (= sym :id)
-              (recur :get-first (pop q)
-                     (assoc r :label (:value t)))
-              (recur :get-first q r))
+        (case p
+          :get-label ;try :get-first next if proceed
+          (if (= t :id)
+            (recur :get-first (pop q) (assoc r :label (:value x)))
+            (recur :get-first q r))
 
-            :get-first ;try :get-rest next if proceed
-            (if (or (token-directive sym) (token-opcode sym))
-              (recur :get-rest (pop q)
-                     (assoc r :first sym))
-              (assoc r :errmsg
-                     "doesn't find directive or opcode at expected position"))
+          :get-first ;try :get-rest next if proceed
+          (if (or (token-directive t) (token-opcode t))
+            (recur :get-rest (pop q) (assoc r :first t))
+            (assoc r :errmsg
+                   "doesn't find directive or opcode at expected position"))
 
-            :get-rest
-            (if (or (= sym :id) (= sym :decimal) (= sym :string) (token-register sym))
-              (recur :get-rest (pop q)
-                     (assoc r :rest (conj (:rest r) t)))
-              (assoc r :errmsg
-                     (str "unexpected " sym " token is found")))))))))
+          :get-rest
+          (if (or (#{:id :decimal :string} t) (token-register t))
+            (recur :get-rest (pop q) (assoc r :rest (conj (:rest r) x)))
+            (assoc r :errmsg (str "unexpected " t " token is found"))))))))
 
 (defn token-queue-scan-reducer [v q]
-  (let [curr (if (empty? q) nil (token-queue-scanner q))
-        line-num (inc (count v))]
+  (let [ln   (inc (count v))
+        curr (if (empty? q) nil (token-queue-scanner q))]
     (let [msg (:errmsg curr)]
       (if msg
-        (do (println "Error at line" line-num ":" msg ".")
-            (conj v nil))
-        (conj v (if curr (assoc curr :line-num line-num)))))))
+        (do (println "Error at line" ln ":" msg ".")
+            (conj v nil)) ;line with error results in a nil item in result vector
+        (conj v (if curr (assoc curr :line-num ln)))))))
 
 (defn second-pass
   "produce a vector of instruction maps, one for each token queue from first pass"
